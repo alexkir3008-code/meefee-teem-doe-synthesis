@@ -1,0 +1,9 @@
+__pycache__/
+.venv/
+checkpoints/
+checkpoints_old/
+results/
+data_cache_*.npy
+train_log.csv
+*.pt
+!models/*.pt

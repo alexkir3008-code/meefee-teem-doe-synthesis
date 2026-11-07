@@ -1,0 +1,5 @@
+numpy
+matplotlib
+pillow>=10.1
+gradio
+# PyTorch ставится отдельно, под вашу видеокарту — см. README
