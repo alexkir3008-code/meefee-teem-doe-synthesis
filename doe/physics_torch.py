@@ -60,15 +60,38 @@ def metrics(X01, T01):
     return r, m.mean(dim=(-2, -1))
 
 
-def loss_fn(phase, T, w_ssim=0.5, p=2.0, return_parts=False):
-    """Та же ошибка, что optimize_np.loss_grad: сумма по плоскостям ((1−КК) + w·(1−SSIM))^p, среднее по пакету."""
-    X = to_display(intensity(phase), T)
-    r, q = metrics(X, T)
-    L = (1 - r) + w_ssim * (1 - q)
-    total = (L ** p).sum(dim=1).mean()
-    if return_parts:
-        return total, r.detach(), q.detach()
-    return total
+def _pcc(X, Y):
+    xc = X - X.mean(dim=(-2, -1), keepdim=True)
+    yc = Y - Y.mean(dim=(-2, -1), keepdim=True)
+    return (xc * yc).sum(dim=(-2, -1)) / torch.sqrt((xc ** 2).sum(dim=(-2, -1)) * (yc ** 2).sum(dim=(-2, -1)) + 1e-12)
+
+
+def _ssim(X, Y):
+    k = _gauss_kernel(X.device)
+    mx, my = _G(X, k), _G(Y, k)
+    sxx = _G(X * X, k) - mx ** 2
+    syy = _G(Y * Y, k) - my ** 2
+    sxy = _G(X * Y, k) - mx * my
+    m = (2 * mx * my + C1) * (2 * sxy + C2) / ((mx ** 2 + my ** 2 + C1) * (sxx + syy + C2))
+    return m.mean(dim=(-2, -1))
+
+
+def plane_losses(phase, T, w_ssim=0.5):
+    """Ошибка по каждой плоскости (B, 4) — как optimize_np.plane_loss:
+    (1 − КК(|K|, T)) + w·(1 − SSIM(|K| под среднюю яркость цели, T))."""
+    A = torch.sqrt(intensity(phase) + 1e-12)
+    Y = T / (T.amax(dim=(-2, -1), keepdim=True) + 1e-12) * 255
+    L = 1 - _pcc(A, Y)
+    if w_ssim > 0:
+        s = Y.sum(dim=(-2, -1), keepdim=True) / 255 / (A.sum(dim=(-2, -1), keepdim=True) + 1e-12)
+        X = torch.clamp(A * s, max=1.0) * 255
+        L = L + w_ssim * (1 - _ssim(X, Y))
+    return L
+
+
+def loss_fn(phase, T, w_ssim=0.5, p=2.0):
+    """Сумма по плоскостям L_k^p (p=2 сильнее тянет худшую картинку), среднее по пакету."""
+    return (plane_losses(phase, T, w_ssim) ** p).sum(dim=1).mean()
 
 
 def refine(T, init_phase, steps=300, lr=0.05, w_ssim=0.5, p=2.0):
@@ -79,9 +102,7 @@ def refine(T, init_phase, steps=300, lr=0.05, w_ssim=0.5, p=2.0):
     best = phi.detach().clone()
     best_l = torch.full((T.shape[0],), float("inf"), device=T.device)
     for _ in range(steps):
-        X = to_display(intensity(phi), T)
-        r, q = metrics(X, T)
-        L = (((1 - r) + w_ssim * (1 - q)) ** p).sum(dim=1)        # по каждому примеру
+        L = (plane_losses(phi, T, w_ssim) ** p).sum(dim=1)        # по каждому примеру
         better = L.detach() < best_l
         best[better] = phi.detach()[better]
         best_l = torch.where(better, L.detach(), best_l)

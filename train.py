@@ -140,7 +140,7 @@ def main():
             print(f"шаг {step}/{a.steps}  ошибка {np.mean(run[-100:]):.3f}  {time.time() - t0:.0f} с", flush=True)
         if step % a.eval_every == 0 or step == a.steps:
             kk, ss = validate(net, val, device)
-            score = (kk + ss) / 2
+            score = kk          # лучшая — по КК: SSIM при нормировке на максимум «обманывается» яркой точкой
             mark = ""
             ck = {"model": net.state_dict(), "base": a.base, "stages": a.stages, "refiner_base": a.refiner_base,
                   "step": step, "val_KK": kk, "val_SSIM": ss}
