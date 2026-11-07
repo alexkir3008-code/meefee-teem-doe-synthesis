@@ -25,6 +25,20 @@ def intensity(phase):
     return F.real ** 2 + F.imag ** 2
 
 
+def back_propagate(U):
+    """Обратная дифракция Френеля: поле в плоскостях изображений (B, 4, N, N) -> вклад каждой
+    плоскости в поле ДОЭ (B, 4, N, N). Точная обратная операция к intensity/полю: прямой расчёт
+    поля из результата даёт исходное U."""
+    H = torch.fft.fftshift(torch.fft.ifft2(torch.fft.ifftshift(U, dim=(-2, -1))), dim=(-2, -1))
+    return H * torch.conj(chirps(U.device))[None]
+
+
+def field(phase_or_H):
+    """Комплексное поле во всех 4 плоскостях от комплексного поля ДОЭ (B, N, N)."""
+    F = phase_or_H[:, None] * chirps(phase_or_H.device)[None]
+    return torch.fft.fftshift(torch.fft.fft2(torch.fft.ifftshift(F, dim=(-2, -1))), dim=(-2, -1))
+
+
 def _gauss_kernel(device, sigma=1.5, radius=5):
     x = torch.arange(-radius, radius + 1, dtype=torch.float32, device=device)
     g = torch.exp(-x ** 2 / (2 * sigma ** 2))

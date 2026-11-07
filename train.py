@@ -6,6 +6,7 @@
   python train.py --images my_pics     # подмешать свои картинки (папка png/jpg)
   python train.py --init checkpoints_old/best.pt --steps 15000 --lr 2e-4   # дообучить готовую модель
   python train.py --init models/best.pt --stages 2 --steps 15000 --lr 2e-4 # сеть с физикой внутри
+  python train.py --arch bp --steps 30000                                  # сеть с обратной дифракцией (лучшая)
 
 Сохраняет checkpoints/best.pt (лучшая по проверке), checkpoints/last.pt и train_log.csv.
 Работает на любой видеокарте или процессоре (см. doe/device.py).
@@ -81,6 +82,8 @@ def main():
     ap.add_argument("--init", default=None, help="начать с весов готовой модели (дообучение), например checkpoints_old/best.pt")
     ap.add_argument("--stages", type=int, default=0, help="сколько физических блоков уточнения внутри сети (0 — обычная сеть, 2 — с физикой внутри)")
     ap.add_argument("--refiner-base", type=int, default=16, help="ширина блоков уточнения")
+    ap.add_argument("--arch", default="unet", choices=["unet", "bp"],
+                    help="unet — обычная сеть; bp — сеть с физическим слоем обратной дифракции (рекомендуется)")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
 
@@ -94,7 +97,7 @@ def main():
     os.makedirs("checkpoints", exist_ok=True)
     if a.init and not a.resume:
         a.base = torch.load(a.init, map_location="cpu").get("base", a.base)
-    net = build_model(a.base, a.stages, a.refiner_base).to(device)
+    net = build_model(a.base, a.stages, a.refiner_base, a.arch).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
 
     def lr_at(step):
@@ -111,7 +114,7 @@ def main():
         print(f"Продолжаю с шага {start}")
     if a.init and not a.resume:
         ck = torch.load(a.init, map_location=device)
-        if a.stages > 0 and ck.get("stages", 0) == 0:
+        if a.arch == "unet" and a.stages > 0 and ck.get("stages", 0) == 0:
             net.base_net.load_state_dict(ck["model"])     # обычная сеть -> первая часть сети с физикой
             print(f"Первая часть сети взята из {a.init}, физические блоки добавлены (stages={a.stages})")
         else:
@@ -142,7 +145,7 @@ def main():
             kk, ss = validate(net, val, device)
             score = kk          # лучшая — по КК: SSIM при нормировке на максимум «обманывается» яркой точкой
             mark = ""
-            ck = {"model": net.state_dict(), "base": a.base, "stages": a.stages, "refiner_base": a.refiner_base,
+            ck = {"model": net.state_dict(), "base": a.base, "stages": a.stages, "refiner_base": a.refiner_base, "arch": a.arch,
                   "step": step, "val_KK": kk, "val_SSIM": ss}
             if score > best:
                 best = score

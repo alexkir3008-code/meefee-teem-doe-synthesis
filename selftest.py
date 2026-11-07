@@ -18,7 +18,7 @@ except Exception as e:
 print("PyTorch", torch.__version__)
 from doe.device import pick_device
 from doe import physics_torch as PT
-from doe.model import DOENet, DOENetPhys
+from doe.model import DOENet, DOENetPhys, DOENetBP
 
 dev = pick_device()
 src = ImageSource(seed=3)
@@ -67,4 +67,25 @@ for i in range(10):
     loss2 = PT.loss_fn(phys(Tt), Tt)
     opt2.zero_grad(); loss2.backward(); opt2.step()
 print(f"сеть с физикой внутри: 10 шагов {time.time() - t0:.1f} с: OK")
+
+# 5) обратная дифракция: прямой расчёт от результата возвращает исходное поле
+U = torch.complex(torch.rand(1, 4, 128, 128, device=dev), torch.rand(1, 4, 128, 128, device=dev))
+Hk = PT.back_propagate(U)
+for k in range(4):
+    Fk = PT.field(Hk[:, k])[:, k]
+    err = ((Fk - U[:, k]).abs().max() / U[:, k].abs().max()).item()
+    assert err < 1e-3, f"обратная дифракция неточна: {err}"
+print("обратная дифракция Френеля точна: OK")
+
+# 6) сеть с обратной дифракцией учится
+bp = DOENetBP(32, stages=0).to(dev)
+opt3 = torch.optim.Adam(bp.parameters(), 1e-3)
+l_first = None
+t0 = time.time()
+for i in range(40):
+    loss3 = PT.loss_fn(bp(Tt), Tt)
+    opt3.zero_grad(); loss3.backward(); opt3.step()
+    l_first = l_first or loss3.item()
+assert torch.isfinite(loss3), "ошибка не число"
+print(f"сеть с обратной дифракцией: ошибка {l_first:.3f} -> {loss3.item():.3f}, {time.time() - t0:.1f} с: OK")
 print("\nВСЁ РАБОТАЕТ. Дальше: python train.py")
