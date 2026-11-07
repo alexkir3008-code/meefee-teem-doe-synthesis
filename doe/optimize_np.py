@@ -38,7 +38,7 @@ def _pcc_grad(x, y):
     return r, yc / (nx * ny) - r * xc / nx**2
 
 
-def plane_loss(A, T, w_ssim=0.5):
+def plane_loss(A, T, w_ssim=0.5, w_max=0.5):
     """A — модуль поля |K| (не сдвинут), T — цель (не сдвинута).
     Ошибка = (1 − КК(A, T)) + w·(1 − SSIM(A', T)), где A' — модуль, приведённый к средней яркости цели
     и обрезанный сверху. КК не зависит от масштаба. SSIM на нормировке по средней яркости нельзя
@@ -58,10 +58,19 @@ def plane_loss(A, T, w_ssim=0.5):
         L += w_ssim * (1 - q)
         gX = -w_ssim * gq * 255 * free
         gA = gA + s * gX - (gX * X).sum() / S
+    if w_max > 0:                                              # SSIM как у проверяющих (нормировка на максимум)
+        j = np.unravel_index(np.argmax(A), A.shape)
+        M = A[j] + 1e-12
+        qm, gq = _ssim_grad(A / M * 255, Y)
+        L += w_max * (1 - qm)
+        gX = -w_max * gq * 255
+        g2 = gX / M
+        g2[j] -= (gX * A).sum() / M**2
+        gA = gA + g2
     return L, gA, r, q
 
 
-def loss_grad(phase, targets, w_ssim=0.5, p=2.0):
+def loss_grad(phase, targets, w_ssim=0.5, p=2.0, w_max=0.5):
     """Сумма по плоскостям L_k^p (p=2 сильнее тянет худшую картинку) и градиент по фазе."""
     Ls, grads = [], []
     for k, T in enumerate(targets):
@@ -69,7 +78,7 @@ def loss_grad(phase, targets, w_ssim=0.5, p=2.0):
         F = np.fft.fft2(u)
         I = np.abs(F) ** 2
         A = np.sqrt(I + 1e-12)                                   # модуль поля
-        L, gA, _, _ = plane_loss(A, np.fft.ifftshift(T), w_ssim)
+        L, gA, _, _ = plane_loss(A, np.fft.ifftshift(T), w_ssim, w_max)
         gI = gA / (2 * A)                                        # dL/dI = dL/dA · dA/dI
         g = -2 * np.imag(u * np.fft.fft2(gI * np.conj(F)))
         Ls.append(L); grads.append(np.fft.fftshift(g))

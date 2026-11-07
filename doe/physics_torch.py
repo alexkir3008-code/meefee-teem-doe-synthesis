@@ -90,7 +90,7 @@ def _ssim(X, Y):
     return m.mean(dim=(-2, -1))
 
 
-def plane_losses(phase, T, w_ssim=0.5):
+def plane_losses(phase, T, w_ssim=0.5, w_max=0.5):
     """Ошибка по каждой плоскости (B, 4) — как optimize_np.plane_loss:
     (1 − КК(|K|, T)) + w·(1 − SSIM(|K| под среднюю яркость цели, T))."""
     A = torch.sqrt(intensity(phase) + 1e-12)
@@ -100,12 +100,15 @@ def plane_losses(phase, T, w_ssim=0.5):
         s = Y.sum(dim=(-2, -1), keepdim=True) / 255 / (A.sum(dim=(-2, -1), keepdim=True) + 1e-12)
         X = torch.clamp(A * s, max=1.0) * 255
         L = L + w_ssim * (1 - _ssim(X, Y))
+    if w_max > 0:                                  # SSIM как у проверяющих (нормировка на максимум)
+        Xm = A / (A.amax(dim=(-2, -1), keepdim=True) + 1e-12) * 255
+        L = L + w_max * (1 - _ssim(Xm, Y))
     return L
 
 
-def loss_fn(phase, T, w_ssim=0.5, p=2.0):
+def loss_fn(phase, T, w_ssim=0.5, p=2.0, w_max=0.5):
     """Сумма по плоскостям L_k^p (p=2 сильнее тянет худшую картинку), среднее по пакету."""
-    return (plane_losses(phase, T, w_ssim) ** p).sum(dim=1).mean()
+    return (plane_losses(phase, T, w_ssim, w_max) ** p).sum(dim=1).mean()
 
 
 def refine(T, init_phase, steps=300, lr=0.05, w_ssim=0.5, p=2.0):

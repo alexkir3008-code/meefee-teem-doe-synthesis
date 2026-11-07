@@ -74,7 +74,8 @@ def main():
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--lr", type=float, default=5e-4)
     ap.add_argument("--base", type=int, default=32, help="ширина сети (32 — норм, 48 — мощнее и медленнее)")
-    ap.add_argument("--w-ssim", type=float, default=0.5, help="вес ИСС в ошибке (меньше — выше КК)")
+    ap.add_argument("--w-ssim", type=float, default=0.5, help="вес ИСС (нормировка по средней яркости) в ошибке")
+    ap.add_argument("--w-ssim-max", type=float, default=0.5, help="вес ИСС как у проверяющих (нормировка на максимум)")
     ap.add_argument("--cache", type=int, default=20000, help="сколько картинок сгенерировать для обучения")
     ap.add_argument("--images", default=None, help="папка своих картинок для подмешивания")
     ap.add_argument("--eval-every", type=int, default=1000)
@@ -133,7 +134,7 @@ def main():
         for g in opt.param_groups:
             g["lr"] = lr_at(step)
         T = sample(cache, a.batch, rng, device)
-        loss = PT.loss_fn(net(T), T, w_ssim=a.w_ssim)
+        loss = PT.loss_fn(net(T), T, w_ssim=a.w_ssim, w_max=a.w_ssim_max)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
@@ -143,7 +144,7 @@ def main():
             print(f"шаг {step}/{a.steps}  ошибка {np.mean(run[-100:]):.3f}  {time.time() - t0:.0f} с", flush=True)
         if step % a.eval_every == 0 or step == a.steps:
             kk, ss = validate(net, val, device)
-            score = kk          # лучшая — по КК: SSIM при нормировке на максимум «обманывается» яркой точкой
+            score = 2 * kk * ss / (kk + ss + 1e-9)   # среднее гармоническое: наказывает за разрыв КК и ИСС
             mark = ""
             ck = {"model": net.state_dict(), "base": a.base, "stages": a.stages, "refiner_base": a.refiner_base, "arch": a.arch,
                   "step": step, "val_KK": kk, "val_SSIM": ss}
