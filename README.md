@@ -4,6 +4,30 @@
 
 Одна фазовая маска 128×128 восстанавливает 4 разных изображения на расстояниях 24,1 / 25,3 / 26,5 / 27,7 мм (λ = 532 нм, пиксель ПВМС 10 мкм). Расчёт идёт прямым методом дифракции Френеля с одним преобразованием Фурье, по формуле из условия.
 
+## Запуск в Docker (для проверки)
+
+```
+docker build -t meefee-doe .
+docker run --rm -v "<папка с комплектами>:/data/input" -v "<папка для результатов>:/data/output" meefee-doe
+```
+
+Windows (PowerShell), из папки репозитория:
+```
+docker run --rm -v "${PWD}\input:/data/input" -v "${PWD}\output:/data/output" meefee-doe
+```
+
+**Вход** (`/data/input`): либо 4 изображения (один комплект), либо подпапки по 4 изображения (несколько комплектов). Порядок изображений по имени файла = порядок плоскостей 24,1 / 25,3 / 26,5 / 27,7 мм. Любой размер и цвет приводятся к 128×128 grayscale.
+
+**Выход** (`/data/output/<комплект>/`):
+- `doe.png` — фазовый ДОЭ, PNG 128×128, 8 бит, grayscale, 0 = −π, 255 = +π;
+- `restored_1..4.png` — восстановление дифракцией Френеля (модуль |K|, нормировка на максимум);
+- `metrics.csv` — SSIM и Пирсон по каждой паре;
+- `/data/output/results.csv` — средние SSIM, Пирсон и время синтеза по каждому комплекту и итог.
+
+Проверка на встроенных примерах: `docker run --rm -v "<папка для результатов>:/data/output" meefee-doe --input examples --output /data/output`.
+
+Образ работает на процессоре (видеокарта не нужна). ДОЭ синтезирует только нейросеть, за один проход. Сборка и запуск образа проверяются автоматически (GitHub Actions, вкладка Actions).
+
 ## Результаты
 
 Тестовые изображения — цифры 1–4 (`examples/`). Метрики посчитаны по сохранённому 8-битному `doe.png`, амплитуды нормированы на максимум. RTX 5060.
@@ -41,7 +65,7 @@
 ```
 py -3.12 -m venv .venv
 .venv\Scripts\activate            (Mac/Linux: source .venv/bin/activate)
-pip install -r requirements.txt
+pip install -r requirements.txt          (для интерфейса ещё: pip install -r requirements-app.txt)
 ```
 
 PyTorch выбирается под ваше железо:
@@ -61,7 +85,8 @@ PyTorch выбирается под ваше железо:
 ```
 python selftest.py                       # 1. всё ли работает (все строки OK)
 python train.py                          # 2. (необязательно) своё обучение → checkpoints/best.pt; без него берётся models/best.pt
-python solve.py --dir input_images       # 3. решение: 4 картинки → файлы для сдачи
+python infer.py --input input --output output   # 3. решение: комплекты по 4 картинки → ДОЭ (как в Docker)
+python solve.py --dir input_images       #    один комплект + сравнение с классикой и картинка summary.png
 python benchmark.py                      # 4. сравнение методов → benchmark.png для презентации
 python app.py                            # 5. интерфейс в браузере
 ```
@@ -99,6 +124,8 @@ doe/physics_torch.py   та же физика и ошибка на PyTorch
 doe/model.py           нейросети DOENet и DOENetPhys (с физикой внутри)
 doe/data.py            генератор обучающих изображений (цифры, буквы, фигуры, точки, пятна)
 doe/device.py          выбор устройства (NVIDIA / AMD ROCm / Intel / Apple / CPU)
+infer.py               запуск для проверки (точка входа Docker)
+Dockerfile             образ для проверки
 train.py  solve.py  benchmark.py  app.py  selftest.py
 test_np.py             проверки физики, формата и метрик
 models/best.pt         обученная модель

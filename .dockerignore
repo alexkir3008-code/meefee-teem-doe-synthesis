@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+__pycache__
+checkpoints
+checkpoints_old
+results
+output
+input
+data_cache_*.npy
+train_log.csv
+docs
+*.md
+!README.md

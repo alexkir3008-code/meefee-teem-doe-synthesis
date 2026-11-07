@@ -1,0 +1,30 @@
+name: Docker — сборка и проверка
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка образа
+        run: docker build -t meefee-doe .
+      - name: Запуск на примерах (2 комплекта)
+        run: |
+          mkdir -p test_in/set1 test_in/set2 test_out
+          cp examples/*.png test_in/set1/
+          for i in 1 2 3 4; do cp examples/$((5 - i)).png test_in/set2/$i.png; done
+          docker run --rm -v "$PWD/test_in:/data/input" -v "$PWD/test_out:/data/output" meefee-doe
+          cat test_out/results.csv
+      - name: Проверка формата выхода
+        run: |
+          docker run --rm --entrypoint python -v "$PWD/test_out:/out" meefee-doe -c "
+          from PIL import Image
+          for s in ('set1', 'set2'):
+              im = Image.open(f'/out/{s}/doe.png')
+              assert im.size == (128, 128) and im.mode == 'L', (s, im.size, im.mode)
+          print('doe.png: 128x128, 8 бит, grayscale - OK')
+          "
