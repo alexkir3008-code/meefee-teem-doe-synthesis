@@ -128,6 +128,7 @@ doe/model.py           нейросети DOENet и DOENetPhys (с физико�
 doe/data.py            генератор обучающих изображений (цифры, буквы, фигуры, точки, пятна)
 doe/device.py          выбор устройства (NVIDIA / AMD ROCm / Intel / Apple / CPU)
 infer.py               запуск для проверки (точка входа Docker)
+merge_models.py        объединение двух дообученных моделей усреднением весов (model soup)
 Dockerfile             образ для проверки
 train.py  solve.py  benchmark.py  app.py  selftest.py
 test_np.py             проверки физики, формата и метрик
