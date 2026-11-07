@@ -18,7 +18,7 @@ except Exception as e:
 print("PyTorch", torch.__version__)
 from doe.device import pick_device
 from doe import physics_torch as PT
-from doe.model import DOENet
+from doe.model import DOENet, DOENetPhys
 
 dev = pick_device()
 src = ImageSource(seed=3)
@@ -53,8 +53,18 @@ for i in range(30):
     l0 = l0 or loss.item()
 print(f"обучение 30 шагов: ошибка {l0:.3f} -> {loss.item():.3f}, {time.time() - t0:.1f} с: OK")
 
-# 4) доводка
-r = PT.refine(Tt[:1], net(Tt[:1]).detach(), steps=50)
-assert r.shape == (1, 128, 128) and torch.isfinite(r).all()
-print("доводка: OK")
+# 4) сеть с физикой внутри: в начале совпадает с обычной сетью и учится
+phys = DOENetPhys(32, stages=2).to(dev)
+phys.base_net.load_state_dict(net.state_dict())
+net.eval(); phys.eval()
+with torch.no_grad():
+    d = (torch.cos(phys(Tt)) - torch.cos(net(Tt))).abs().max().item()
+assert d < 1e-3, f"сеть с физикой в начале должна совпадать с обычной: {d}"
+phys.train()
+opt2 = torch.optim.Adam(phys.parameters(), 1e-4)
+t0 = time.time()
+for i in range(10):
+    loss2 = PT.loss_fn(phys(Tt), Tt)
+    opt2.zero_grad(); loss2.backward(); opt2.step()
+print(f"сеть с физикой внутри: 10 шагов {time.time() - t0:.1f} с: OK")
 print("\nВСЁ РАБОТАЕТ. Дальше: python train.py")

@@ -22,8 +22,7 @@ except Exception:
     torch = None
     NET = None
 
-METHODS = (["Нейросеть + доводка", "Нейросеть"] if NET is not None else []) \
-    + (["Гершберг–Сакстон + доводка"] if torch is not None else []) + ["Гершберг–Сакстон"]
+METHODS = (["Нейросеть"] if NET is not None else []) + ["Гершберг–Сакстон (для сравнения)"]
 
 
 def prep(img):
@@ -31,25 +30,18 @@ def prep(img):
     return np.asarray(im, dtype=np.float64) / 255
 
 
-def run(i1, i2, i3, i4, method, steps):
+def run(i1, i2, i3, i4, method):
     imgs = [i1, i2, i3, i4]
     if any(i is None for i in imgs):
         raise gr.Error("Загрузите все 4 изображения")
     T = [prep(i) for i in imgs]
     t0 = time.time()
-    if method == "Гершберг–Сакстон":
+    if method.startswith("Гершберг"):
         phase = P.gs_multiplane(T, 300)
-    elif method == "Гершберг–Сакстон + доводка":
-        Tt = torch.tensor(np.stack(T)[None], dtype=torch.float32, device=DEV)
-        init = torch.tensor(P.gs_multiplane(T, 150)[None], dtype=torch.float32, device=DEV)
-        phase = PT.refine(Tt, init, steps=int(steps))[0].cpu().numpy()
     else:
         Tt = torch.tensor(np.stack(T)[None], dtype=torch.float32, device=DEV)
         with torch.no_grad():
-            ph = NET(Tt)
-        if method == "Нейросеть + доводка":
-            ph = PT.refine(Tt, ph, steps=int(steps))
-        phase = ph[0].cpu().numpy()
+            phase = NET(Tt)[0].cpu().numpy()
     dt = time.time() - t0
     out = tempfile.mkdtemp()
     P.save_doe(phase, os.path.join(out, "doe.png"))
@@ -73,7 +65,6 @@ with gr.Blocks(title="Синтез ДОЭ") as demo:
         ins = [gr.Image(label=f"Изображение {k + 1} · {DISTANCES[k] * 1e3:.1f} мм", height=180) for k in range(4)]
     with gr.Row():
         method = gr.Radio(METHODS, value=METHODS[0], label="Метод")
-        steps = gr.Slider(50, 1000, value=300, step=50, label="Шаги доводки")
         btn = gr.Button("Рассчитать ДОЭ", variant="primary")
     with gr.Row():
         doe = gr.Image(label="ДОЭ (0 = −π, 255 = +π)", height=180)
@@ -81,7 +72,7 @@ with gr.Blocks(title="Синтез ДОЭ") as demo:
     table = gr.Dataframe(headers=["№", "z, мм", "КК", "ИСС"], label="Метрики")
     info = gr.Markdown()
     file = gr.File(label="Скачать файлы для сдачи (zip)")
-    btn.click(run, [*ins, method, steps], [doe, *outs, table, info, file])
+    btn.click(run, [*ins, method], [doe, *outs, table, info, file])
 
 if __name__ == "__main__":
     demo.launch()

@@ -5,6 +5,7 @@
   python train.py --resume             # продолжить с последней точки
   python train.py --images my_pics     # подмешать свои картинки (папка png/jpg)
   python train.py --init checkpoints_old/best.pt --steps 15000 --lr 2e-4   # дообучить готовую модель
+  python train.py --init models/best.pt --stages 2 --steps 15000 --lr 2e-4 # сеть с физикой внутри
 
 Сохраняет checkpoints/best.pt (лучшая по проверке), checkpoints/last.pt и train_log.csv.
 Работает на любой видеокарте или процессоре (см. doe/device.py).
@@ -18,7 +19,7 @@ import numpy as np
 import torch
 from doe.device import pick_device
 from doe.data import ImageSource
-from doe.model import DOENet
+from doe.model import DOENet, build_model
 from doe import physics_torch as PT
 from doe import physics_np as P
 from doe.metrics_np import evaluate
@@ -78,6 +79,8 @@ def main():
     ap.add_argument("--eval-every", type=int, default=1000)
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--init", default=None, help="начать с весов готовой модели (дообучение), например checkpoints_old/best.pt")
+    ap.add_argument("--stages", type=int, default=0, help="сколько физических блоков уточнения внутри сети (0 — обычная сеть, 2 — с физикой внутри)")
+    ap.add_argument("--refiner-base", type=int, default=16, help="ширина блоков уточнения")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
 
@@ -91,7 +94,7 @@ def main():
     os.makedirs("checkpoints", exist_ok=True)
     if a.init and not a.resume:
         a.base = torch.load(a.init, map_location="cpu").get("base", a.base)
-    net = DOENet(a.base).to(device)
+    net = build_model(a.base, a.stages, a.refiner_base).to(device)
     opt = torch.optim.AdamW(net.parameters(), lr=a.lr, weight_decay=1e-4)
 
     def lr_at(step):
@@ -108,8 +111,12 @@ def main():
         print(f"Продолжаю с шага {start}")
     if a.init and not a.resume:
         ck = torch.load(a.init, map_location=device)
-        net.load_state_dict(ck["model"])
-        print(f"Дообучение с весов {a.init}")
+        if a.stages > 0 and ck.get("stages", 0) == 0:
+            net.base_net.load_state_dict(ck["model"])     # обычная сеть -> первая часть сети с физикой
+            print(f"Первая часть сети взята из {a.init}, физические блоки добавлены (stages={a.stages})")
+        else:
+            net.load_state_dict(ck["model"])
+            print(f"Дообучение с весов {a.init}")
     print(f"Параметров в сети: {sum(p.numel() for p in net.parameters()) / 1e6:.1f} млн")
 
     log_new = not os.path.exists("train_log.csv") or not a.resume
@@ -135,7 +142,8 @@ def main():
             kk, ss = validate(net, val, device)
             score = (kk + ss) / 2
             mark = ""
-            ck = {"model": net.state_dict(), "base": a.base, "step": step, "val_KK": kk, "val_SSIM": ss}
+            ck = {"model": net.state_dict(), "base": a.base, "stages": a.stages, "refiner_base": a.refiner_base,
+                  "step": step, "val_KK": kk, "val_SSIM": ss}
             if score > best:
                 best = score
                 torch.save(ck, "checkpoints/best.pt")

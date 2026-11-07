@@ -11,6 +11,8 @@
   summary.png                  — картинка для презентации
   methods.csv                  — сравнение всех методов (время и метрики)
 Все метрики считаются по сохранённому doe.png (уже после перевода в 8 бит).
+ДОЭ выдаёт ТОЛЬКО нейросеть за один проход (без итеративной доводки под картинки — по правилам кейса).
+Гершберг–Сакстон считается только для сравнения и в final не попадает.
 """
 import argparse
 import glob
@@ -86,12 +88,8 @@ def main():
     ap.add_argument("--dir")
     ap.add_argument("--model", nargs="+", default=None,
                     help="одна или несколько моделей (ансамбль): --model checkpoints/best.pt best_radomir.pt")
-    ap.add_argument("--refine-steps", type=int, default=500)
-    ap.add_argument("--starts", type=int, default=4, help="сколько вариантов доводить параллельно")
-    ap.add_argument("--w-ssim", type=float, default=0.5, help="вес ИСС в доводке (меньше — выше КК)")
     ap.add_argument("--gs-iters", type=int, default=300)
     ap.add_argument("--out", default=None)
-    ap.add_argument("--best-any", action="store_true", help="в final — лучший из всех методов, а не только нейросетевых")
     a = ap.parse_args()
     if a.model is None:
         from doe.model import default_model_path
@@ -109,45 +107,26 @@ def main():
     cands = {}                                     # метод -> (фаза, секунды)
     t0 = time.time(); cands["Гершберг–Сакстон"] = (P.gs_multiplane(targets, a.gs_iters), time.time() - t0)
 
-    if HAS_TORCH:
-        dev = pick_device()
-        T = torch.tensor(np.stack(targets)[None], dtype=torch.float32, device=dev)
-        inits, start_names = [], []
-        models = [m for m in a.model if os.path.exists(m)]
-        for m in a.model:
-            if not os.path.exists(m):
-                print(f"Модель {m} не найдена — пропускаю.")
-        for mi, m in enumerate(models):
-            net = load_model(m, dev)
-            with torch.no_grad():
-                net(T)                                           # прогрев
-                if dev.type == "cuda": torch.cuda.synchronize()
-                t0 = time.time(); ph_nn = net(T)
-                if dev.type == "cuda": torch.cuda.synchronize()
-                dt = time.time() - t0
-            label = "Нейросеть" if len(models) == 1 else f"Нейросеть {os.path.basename(m)}"
-            cands[label] = (ph_nn[0].cpu().numpy(), dt)
-            inits.append(ph_nn[0]); start_names.append(f"{label} + доводка")
-        if not models:
-            print("Ни одной модели нет — сначала python train.py. Пока без нейросети.")
-        inits.append(torch.tensor(cands["Гершберг–Сакстон"][0], dtype=torch.float32, device=dev))   # старт с классики — тянет КК вверх
-        start_names.append("Гершберг–Сакстон + доводка")
-        g = torch.Generator(device="cpu").manual_seed(0)
-        while len(inits) < a.starts:                              # дополнительные старты
-            base = inits[0] if inits else torch.tensor(cands["Гершберг–Сакстон"][0], dtype=torch.float32, device=dev)
-            noise = (torch.rand(base.shape, generator=g) - 0.5).to(dev) * 0.6 * len(inits)
-            inits.append(base + noise); start_names.append(f"{start_names[0]} (вариант {len(inits)})")
-        init = torch.stack(inits)
-        t0 = time.time()
-        ref = PT.refine(T.expand(len(inits), -1, -1, -1), init, steps=a.refine_steps, w_ssim=a.w_ssim)
-        if dev.type == "cuda": torch.cuda.synchronize()
-        dt = time.time() - t0
-        for nm, ph in zip(start_names, ref.cpu().numpy()):
-            cands[nm] = (ph, dt)
-    else:
-        from doe.optimize_np import optimize
-        print("PyTorch не установлен — использую numpy-оптимизацию (медленнее).")
-        t0 = time.time(); cands["Градиентная оптимизация (numpy)"] = (optimize(targets, init=cands["Гершберг–Сакстон"][0], steps=300), time.time() - t0)
+    if not HAS_TORCH:
+        raise SystemExit("Нужен PyTorch: финальный ДОЭ выдаёт только нейросеть (см. README, установка).")
+    dev = pick_device()
+    T = torch.tensor(np.stack(targets)[None], dtype=torch.float32, device=dev)
+    models = [m for m in a.model if os.path.exists(m)]
+    for m in a.model:
+        if not os.path.exists(m):
+            print(f"Модель {m} не найдена — пропускаю.")
+    if not models:
+        raise SystemExit("Нет обученной модели (models/best.pt или checkpoints/best.pt).")
+    for m in models:
+        net = load_model(m, dev)
+        with torch.no_grad():
+            net(T)                                               # прогрев
+            if dev.type == "cuda": torch.cuda.synchronize()
+            t0 = time.time(); ph_nn = net(T)                     # ДОЭ за один проход сети
+            if dev.type == "cuda": torch.cuda.synchronize()
+            dt = time.time() - t0
+        label = "Нейросеть" if len(models) == 1 else f"Нейросеть {os.path.basename(m)}"
+        cands[label] = (ph_nn[0].cpu().numpy(), dt)
 
     results = {}
     for name, (ph, dt) in cands.items():
@@ -162,11 +141,7 @@ def main():
             f.write(f"{name};{np.mean(kk):.4f};{min(kk):.4f};{np.mean(ss):.4f};{min(ss):.4f};{np.mean(sg):.4f};{dt:.3f}\n")
 
     nn_names = [n for n in results if n.startswith("Нейросеть")]
-    pool = list(results) if a.best_any or not nn_names else nn_names
-    best = max(pool, key=lambda n: score_rows(results[n][0]))
-    overall = max(results, key=lambda n: score_rows(results[n][0]))
-    if overall != best:
-        print(f"Примечание: по сумме КК+ИСС лучший вообще — «{overall}». Чтобы сдать его: --best-any")
+    best = max(nn_names, key=lambda n: score_rows(results[n][0]))
     rows, recs, q, dt = results[best]
     final = os.path.join(out, "final")
     rows, recs, q = finalize(q, targets, final)

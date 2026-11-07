@@ -30,14 +30,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--sets", type=int, default=20)
     ap.add_argument("--model", default=None)
-    ap.add_argument("--refine-steps", type=int, default=200)
     a = ap.parse_args()
     a.model = a.model or default_model_path()
     dev = pick_device()
     net = load_model(a.model, dev)
     src = ImageSource(seed=777)
     sets = [src.quad().astype(np.float32) for _ in range(a.sets)]
-    res = {m: {"kk": [], "ss": [], "t": []} for m in ["Гершберг–Сакстон (300 ит.)", "Нейросеть", "Нейросеть + доводка"]}
+    res = {m: {"kk": [], "ss": [], "t": []} for m in ["Гершберг–Сакстон (300 ит.)", "Нейросеть"]}
     with torch.no_grad():
         net(torch.tensor(sets[0][None], device=dev))
     for i, T in enumerate(sets):
@@ -47,8 +46,6 @@ def main():
         with torch.no_grad():
             sync(dev); t0 = time.time(); phn = net(Tt); sync(dev); dt_nn = time.time() - t0
         kk, ss = measure(phn[0].cpu().numpy(), T); r = res["Нейросеть"]; r["kk"] += kk; r["ss"] += ss; r["t"].append(dt_nn)
-        sync(dev); t0 = time.time(); phr = PT.refine(Tt, phn, steps=a.refine_steps); sync(dev); dt = time.time() - t0 + dt_nn
-        kk, ss = measure(phr[0].cpu().numpy(), T); r = res["Нейросеть + доводка"]; r["kk"] += kk; r["ss"] += ss; r["t"].append(dt)
         print(f"набор {i + 1}/{a.sets}", flush=True)
     with open("benchmark.csv", "w", encoding="utf-8") as f:
         f.write("метод;КК_ср;КК_мин;ИСС_ср;ИСС_мин;время_мс\n")
