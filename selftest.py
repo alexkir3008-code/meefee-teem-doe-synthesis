@@ -88,4 +88,22 @@ for i in range(40):
     l_first = l_first or loss3.item()
 assert torch.isfinite(loss3), "ошибка не число"
 print(f"сеть с обратной дифракцией: ошибка {l_first:.3f} -> {loss3.item():.3f}, {time.time() - t0:.1f} с: OK")
+
+# 7) физические блоки: в начале «прозрачны», затем учатся
+bp3 = DOENetBP(32, stages=3).to(dev)
+bp3.load_state_dict(bp.state_dict(), strict=False)
+bp.eval(); bp3.eval()
+with torch.no_grad():
+    d = (torch.cos(bp3(Tt)) - torch.cos(bp(Tt))).abs().max().item()
+assert d < 1e-2, f"блоки в начале должны быть прозрачны: {d}"
+bp3.train()
+opt4 = torch.optim.Adam(bp3.parameters(), 3e-4)
+l_first = None
+t0 = time.time()
+for i in range(20):
+    loss4 = PT.loss_fn(bp3(Tt), Tt)
+    opt4.zero_grad(); loss4.backward(); opt4.step()
+    l_first = l_first or loss4.item()
+assert torch.isfinite(loss4), "ошибка не число"
+print(f"сеть с 3 физическими блоками: ошибка {l_first:.3f} -> {loss4.item():.3f}, {(time.time() - t0) / 20:.2f} с/шаг: OK")
 print("\nВСЁ РАБОТАЕТ. Дальше: python train.py")

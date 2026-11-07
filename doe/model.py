@@ -107,50 +107,66 @@ class DOENetPhys(nn.Module):
 
 
 class DOENetBP(nn.Module):
-    """Нейросеть с физическим слоем обратной дифракции (идея DeepCGH, Eybposh et al., 2020).
+    """Нейросеть с физическими слоями дифракции Френеля внутри (идея DeepCGH, Eybposh et al., 2020).
 
-    1) U-Net по 4 изображениям предсказывает для КАЖДОЙ плоскости фазу и поправку амплитуды
-       светового поля в плоскости изображения.
-    2) Физический слой (без обучаемых параметров) переносит поле каждой плоскости обратно
-       в плоскость ДОЭ — обратная дифракция Френеля на своё расстояние, — и поля складываются
-       с обученными весами. Фаза суммы = ДОЭ.
-    3) (stages > 0) Блоки уточнения: физический слой прямой дифракции показывает сети,
-       что получается в 4 плоскостях, обученный блок вносит поправку в маску.
-    Один проход сети с фиксированной архитектурой; под конкретные изображения ничего не подбирается.
+    Кодировщик: U-Net по 4 изображениям предсказывает поле (фазу и поправку амплитуды) в каждой
+    из 4 плоскостей изображений; физический слой обратной дифракции переносит их в плоскость ДОЭ
+    и складывает с обученными весами. Фаза суммы — первая маска.
+
+    Блоки (stages, у каждого свои веса):
+      1) физический слой прямой дифракции: поле маски в 4 плоскостях;
+      2) обученная U-Net видит цели и текущее поле и поправляет амплитуду и фазу в каждой плоскости;
+      3) физический слой обратной дифракции возвращает поле в плоскость ДОЭ, новая маска = фаза суммы.
+    В начале обучения блоки «прозрачны» (выход блока = вход), поэтому добавление блоков не ухудшает сеть.
+    Число блоков фиксировано, веса обучены заранее; под конкретные изображения ничего не подбирается.
     """
 
-    def __init__(self, base=32, stages=0, refiner_base=16):
+    def __init__(self, base=32, stages=0, refiner_base=24):
         super().__init__()
         self.encoder = UNetCore(7, 8, base)                   # 4 фазы + 4 поправки амплитуды
         self.plane_w = nn.Parameter(torch.zeros(4))           # веса плоскостей (softplus)
-        self.refiners = nn.ModuleList([UNetCore(4 + 4 + 2 + 3, 1, refiner_base) for _ in range(stages)])
+        # stage: вход = 4 цели + 4 амплитуды + 4 cos + 4 sin фазы + 3 координаты; выход = 4 da + 4 dt + 4 dp
+        self.refiners = nn.ModuleList([UNetCore(4 + 4 + 8 + 3, 12, refiner_base) for _ in range(stages)])
+        self.stage_w = nn.ParameterList([nn.Parameter(torch.zeros(4)) for _ in range(stages)])
         c = torch.linspace(-1, 1, N)
         yy, xx = torch.meshgrid(c, c, indexing="ij")
         self.register_buffer("coords", torch.stack([xx, yy, xx ** 2 + yy ** 2])[None])
         nn.init.normal_(self.encoder.out.weight, std=1e-3)    # не нули: иначе фаза стартует плоской
 
+    @staticmethod
+    def _combine(U, w_raw):
+        """Поля 4 плоскостей (B,4,N,N) -> фаза ДОЭ: обратная дифракция, нормировка, взвешенная сумма."""
+        from .physics_torch import back_propagate
+        Hk = back_propagate(U)
+        rms = torch.sqrt((Hk.real ** 2 + Hk.imag ** 2).mean(dim=(-2, -1), keepdim=True) + 1e-12)
+        w = Fn.softplus(w_raw + 0.5413)[None, :, None, None]   # softplus(0.5413) = 1
+        H = (Hk / rms * w).sum(dim=1)
+        return torch.atan2(H.imag, H.real)
+
     def forward(self, T):
-        from .physics_torch import intensity, back_propagate
+        from .physics_torch import field
         B = T.shape[0]
         coords = self.coords.expand(B, -1, -1, -1)
+        Tn = T / (T.amax(dim=(-2, -1), keepdim=True) + 1e-6)
         o = self.encoder(torch.cat([T * 2 - 1, coords], dim=1))
         phase_img = o[:, :4] * 3.0
-        amp = (T / (T.amax(dim=(-2, -1), keepdim=True) + 1e-6)) * torch.exp(torch.tanh(o[:, 4:]))
-        U = torch.complex(amp * torch.cos(phase_img), amp * torch.sin(phase_img))
-        Hk = back_propagate(U)                                # (B, 4, N, N) — вклад каждой плоскости в ДОЭ
-        rms = torch.sqrt((Hk.real ** 2 + Hk.imag ** 2).mean(dim=(-2, -1), keepdim=True) + 1e-12)
-        w = Fn.softplus(self.plane_w + 0.5413)[None, :, None, None]   # softplus(0.5413) = 1
-        H = (Hk / rms * w).sum(dim=1)
-        phi = torch.atan2(H.imag, H.real)
-        for r in self.refiners:
-            A = torch.sqrt(intensity(phi) + 1e-12)
-            A = A / (A.amax(dim=(-2, -1), keepdim=True) + 1e-12)
-            x = torch.cat([T * 2 - 1, A * 2 - 1, torch.cos(phi)[:, None], torch.sin(phi)[:, None], coords], dim=1)
-            phi = phi + r(x)[:, 0]
-        return torch.atan2(torch.sin(phi), torch.cos(phi))
+        amp = Tn * torch.exp(torch.tanh(o[:, 4:]))
+        phi = self._combine(torch.complex(amp * torch.cos(phase_img), amp * torch.sin(phase_img)), self.plane_w)
+        for r, sw in zip(self.refiners, self.stage_w):
+            F = field(torch.complex(torch.cos(phi), torch.sin(phi)))          # (B,4,N,N) поле в плоскостях
+            mag = torch.sqrt(F.real ** 2 + F.imag ** 2 + 1e-12)
+            Pc, Ps = F.real / mag, F.imag / mag                               # cos и sin фазы поля
+            A = mag / (mag.amax(dim=(-2, -1), keepdim=True) + 1e-12)
+            d = r(torch.cat([T * 2 - 1, A * 2 - 1, Pc, Ps, coords], dim=1))
+            da, dt, dp = d[:, :4], d[:, 4:8], d[:, 8:]
+            A_new = (A * torch.exp(torch.tanh(da)) + Tn * dt).abs()          # при нулевом выходе = A
+            c, s = torch.cos(dp), torch.sin(dp)
+            U = torch.complex(A_new * (Pc * c - Ps * s), A_new * (Ps * c + Pc * s))   # фаза + dp
+            phi = self._combine(U, sw)
+        return phi
 
 
-def build_model(base=32, stages=0, refiner_base=16, arch="unet"):
+def build_model(base=32, stages=0, refiner_base=24, arch="unet"):
     if arch == "bp":
         return DOENetBP(base, stages, refiner_base)
     return DOENet(base) if stages == 0 else DOENetPhys(base, stages, refiner_base)
@@ -158,8 +174,9 @@ def build_model(base=32, stages=0, refiner_base=16, arch="unet"):
 
 def load_model(path, device):
     ckpt = torch.load(path, map_location=device)
-    net = build_model(ckpt.get("base", 32), ckpt.get("stages", 0), ckpt.get("refiner_base", 16),
-                      ckpt.get("arch", "unet")).to(device)
+    arch = ckpt.get("arch", "unet")
+    net = build_model(ckpt.get("base", 32), ckpt.get("stages", 0),
+                      ckpt.get("refiner_base", 24 if arch == "bp" else 16), arch).to(device)
     net.load_state_dict(ckpt["model"])
     net.eval()
     return net

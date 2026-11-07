@@ -82,11 +82,13 @@ def main():
     ap.add_argument("--resume", action="store_true")
     ap.add_argument("--init", default=None, help="начать с весов готовой модели (дообучение), например checkpoints_old/best.pt")
     ap.add_argument("--stages", type=int, default=0, help="сколько физических блоков уточнения внутри сети (0 — обычная сеть, 2 — с физикой внутри)")
-    ap.add_argument("--refiner-base", type=int, default=16, help="ширина блоков уточнения")
+    ap.add_argument("--refiner-base", type=int, default=None, help="ширина блоков (по умолчанию 24 для bp, 16 для unet)")
     ap.add_argument("--arch", default="unet", choices=["unet", "bp"],
                     help="unet — обычная сеть; bp — сеть с физическим слоем обратной дифракции (рекомендуется)")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
+    if a.refiner_base is None:
+        a.refiner_base = 24 if a.arch == "bp" else 16
 
     device = pick_device()
     torch.manual_seed(a.seed)
@@ -118,6 +120,9 @@ def main():
         if a.arch == "unet" and a.stages > 0 and ck.get("stages", 0) == 0:
             net.base_net.load_state_dict(ck["model"])     # обычная сеть -> первая часть сети с физикой
             print(f"Первая часть сети взята из {a.init}, физические блоки добавлены (stages={a.stages})")
+        elif a.arch == "bp" and ck.get("stages", 0) != a.stages:
+            missing, _ = net.load_state_dict(ck["model"], strict=False)
+            print(f"Сеть взята из {a.init}, добавлены физические блоки (stages={a.stages}, новых тензоров: {len(missing)})")
         else:
             net.load_state_dict(ck["model"])
             print(f"Дообучение с весов {a.init}")
