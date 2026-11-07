@@ -40,6 +40,10 @@ Lt = PT.loss_fn(torch.tensor(ph[:1], device=dev), torch.tensor(T[:1], device=dev
 Ln, _ = loss_grad(ph[0].astype(np.float64), list(T[0].astype(np.float64)))
 assert abs(Lt - Ln) < 2e-2 * max(1, abs(Ln)), (Lt, Ln)
 print(f"функция ошибки совпадает (torch {Lt:.4f}, numpy {Ln:.4f}): OK")
+Lt2 = PT.loss_fn(torch.tensor(ph[:1], device=dev), torch.tensor(T[:1], device=dev), w_max=0, w_q=0.5, w_bg=1.0).item()
+Ln2, _ = loss_grad(ph[0].astype(np.float64), list(T[0].astype(np.float64)), w_max=0, w_q=0.5, w_bg=1.0)
+assert abs(Lt2 - Ln2) < 2e-2 * max(1, abs(Ln2)), (Lt2, Ln2)
+print(f"ошибка с перцентилем и фоном совпадает (torch {Lt2:.4f}, numpy {Ln2:.4f}): OK")
 
 # 3) сеть и несколько шагов обучения
 net = DOENet(32).to(dev)

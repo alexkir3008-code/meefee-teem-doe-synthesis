@@ -76,6 +76,8 @@ def main():
     ap.add_argument("--base", type=int, default=32, help="ширина сети (32 — норм, 48 — мощнее и медленнее)")
     ap.add_argument("--w-ssim", type=float, default=0.5, help="вес ИСС (нормировка по средней яркости) в ошибке")
     ap.add_argument("--w-ssim-max", type=float, default=0.5, help="вес ИСС как у проверяющих (нормировка на максимум)")
+    ap.add_argument("--w-ssim-q", type=float, default=0.0, help="вес ИСС при нормировке на 99,5-й перцентиль (не даёт «яркой точки»)")
+    ap.add_argument("--w-bg", type=float, default=0.0, help="вес штрафа за свет в фоне")
     ap.add_argument("--cache", type=int, default=20000, help="сколько картинок сгенерировать для обучения")
     ap.add_argument("--images", default=None, help="папка своих картинок для подмешивания")
     ap.add_argument("--eval-every", type=int, default=1000)
@@ -139,7 +141,7 @@ def main():
         for g in opt.param_groups:
             g["lr"] = lr_at(step)
         T = sample(cache, a.batch, rng, device)
-        loss = PT.loss_fn(net(T), T, w_ssim=a.w_ssim, w_max=a.w_ssim_max)
+        loss = PT.loss_fn(net(T), T, w_ssim=a.w_ssim, w_max=a.w_ssim_max, w_q=a.w_ssim_q, w_bg=a.w_bg)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
