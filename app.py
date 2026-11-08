@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import gradio as gr
 from PIL import Image
@@ -23,13 +24,26 @@ try:
     MODEL = _ap.parse_known_args()[0].model or default_model_path()
     DEV = pick_device()
     NET = load_model(MODEL, DEV) if os.path.exists(MODEL) else None
+    # Сеть всегда работает в одном и том же потоке: видеокарта настраивает свои библиотеки
+    # отдельно для каждого потока, и первый запуск в новом потоке длится десятки секунд.
+    POOL = ThreadPoolExecutor(max_workers=1)
+
+    def _infer(T):
+        with torch.no_grad():
+            T = torch.as_tensor(T, dtype=torch.float32, device=DEV)
+            if DEV.type == "cuda":
+                torch.cuda.synchronize()
+            t0 = time.time()
+            ph = NET(T)
+            if DEV.type == "cuda":
+                torch.cuda.synchronize()
+            return ph[0].cpu().numpy(), time.time() - t0
+
     if NET is not None:
         print(f"Модель: {MODEL}")
-        with torch.no_grad():                      # прогрев: первый запуск на видеокарте всегда долгий
-            for _ in range(2):
-                NET(torch.zeros(1, 4, 128, 128, device=DEV))
-        if DEV.type == "cuda":
-            torch.cuda.synchronize()
+        for _ in range(3):                         # прогрев в том же потоке, где потом считается ДОЭ
+            POOL.submit(_infer, np.zeros((1, 4, 128, 128), np.float32)).result()
+        print("Сеть прогрета, можно открывать http://127.0.0.1:7860")
 except Exception:
     torch = None
     NET = None
@@ -52,16 +66,7 @@ def run(i1, i2, i3, i4, method):
         phase = P.gs_multiplane(T, 300)
         dt = time.time() - t0
     else:
-        Tt = torch.tensor(np.stack(T)[None], dtype=torch.float32, device=DEV)
-        with torch.no_grad():
-            if DEV.type == "cuda":
-                torch.cuda.synchronize()
-            t0 = time.time()
-            ph = NET(Tt)
-            if DEV.type == "cuda":
-                torch.cuda.synchronize()
-            dt = time.time() - t0
-        phase = ph[0].cpu().numpy()
+        phase, dt = POOL.submit(_infer, np.stack(T)[None].astype(np.float32)).result()
     out = tempfile.mkdtemp()
     P.save_doe(phase, os.path.join(out, "doe.png"))
     q = P.uint8_to_phase(np.asarray(Image.open(os.path.join(out, "doe.png"))))
