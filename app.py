@@ -1,5 +1,7 @@
 """Интерфейс в браузере: загрузите 4 изображения -> ДОЭ, восстановленные изображения, метрики, архив для сдачи.
-  python app.py   (откроется http://127.0.0.1:7860)"""
+  python app.py                              (откроется http://127.0.0.1:7860)
+  python app.py --model models/best.pt       (выбрать модель)"""
+import argparse
 import os
 import shutil
 import tempfile
@@ -16,8 +18,18 @@ try:
     from doe.device import pick_device
     from doe import physics_torch as PT
     from doe.model import load_model, default_model_path
+    _ap = argparse.ArgumentParser()
+    _ap.add_argument("--model", default=None)
+    MODEL = _ap.parse_known_args()[0].model or default_model_path()
     DEV = pick_device()
-    NET = load_model(default_model_path(), DEV) if os.path.exists(default_model_path()) else None
+    NET = load_model(MODEL, DEV) if os.path.exists(MODEL) else None
+    if NET is not None:
+        print(f"Модель: {MODEL}")
+        with torch.no_grad():                      # прогрев: первый запуск на видеокарте всегда долгий
+            for _ in range(2):
+                NET(torch.zeros(1, 4, 128, 128, device=DEV))
+        if DEV.type == "cuda":
+            torch.cuda.synchronize()
 except Exception:
     torch = None
     NET = None
@@ -38,11 +50,18 @@ def run(i1, i2, i3, i4, method):
     t0 = time.time()
     if method.startswith("Гершберг"):
         phase = P.gs_multiplane(T, 300)
+        dt = time.time() - t0
     else:
         Tt = torch.tensor(np.stack(T)[None], dtype=torch.float32, device=DEV)
         with torch.no_grad():
-            phase = NET(Tt)[0].cpu().numpy()
-    dt = time.time() - t0
+            if DEV.type == "cuda":
+                torch.cuda.synchronize()
+            t0 = time.time()
+            ph = NET(Tt)
+            if DEV.type == "cuda":
+                torch.cuda.synchronize()
+            dt = time.time() - t0
+        phase = ph[0].cpu().numpy()
     out = tempfile.mkdtemp()
     P.save_doe(phase, os.path.join(out, "doe.png"))
     q = P.uint8_to_phase(np.asarray(Image.open(os.path.join(out, "doe.png"))))

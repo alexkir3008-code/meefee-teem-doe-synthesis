@@ -94,7 +94,7 @@ python train.py                          # 2. (необязательно) св�
 python infer.py --input input --output output   # 3. решение: комплекты по 4 картинки → ДОЭ (как в Docker)
 python solve.py --dir input_images       #    один комплект + сравнение с классикой и картинка summary.png
 python benchmark.py                      # 4. сравнение методов → benchmark.png для презентации
-python app.py                            # 5. интерфейс в браузере
+python app.py --model models/best.pt     # 5. интерфейс в браузере (без --model берётся checkpoints/best.pt, если есть)
 ```
 
 - Дольше обучение — лучше результат: `python train.py --steps 60000` (на ночь). Прервали — `python train.py --steps 60000 --resume`.
